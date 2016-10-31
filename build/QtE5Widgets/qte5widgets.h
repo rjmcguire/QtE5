@@ -54,6 +54,8 @@
 #include <QSyntaxHighlighter>
 #include <QTextEdit>
 
+#include <QtScript>
+
 typedef int PTRINT;
 typedef unsigned int PTRUINT;
 
@@ -91,6 +93,10 @@ public:
     int        N;       // параметр для aSlotN. Идея запомнить параметр при установке слота и выдать
                         // при срабатывании слота. А ля - диспечерезация
 
+    void sendSignal_V();
+    void sendSignal_VI(int n);
+    void sendSignal_VS(QString* s);
+
 private slots:
     void Slot();
     void SlotN();
@@ -100,6 +106,15 @@ private slots:
     void Slot_v__A_N_b(bool);
     void Slot_v__A_N_v();
     void Slot_v__A_N_QObject(QObject*);
+
+    void Slot_AN();         // void call(Aдркласса, Nчисло);
+    void Slot_ANI(int);     // void call(Aдркласса, Nчисло, int);
+    void Slot_ANB(bool);    // void call(Aдркласса, Nчисло, bool);
+
+signals:
+    void Signal_V();          // Сигнал без параметра
+    void Signal_VI(int);      // Сигнал с int
+    void Signal_VS(QString);  // Сигнал с QString
 };
 
 //___________________________________________________
@@ -134,6 +149,8 @@ public:
     void* aPaintEvent;
     void* aCloseEvent;
     void* aResizeEvent;
+    void* aMousePressEvent;
+    void* aMouseReleaseEvent;
 
 public:
     explicit eQWidget(QWidget* parent, Qt::WindowFlags f);
@@ -144,6 +161,8 @@ protected:
     void paintEvent(QPaintEvent* event);
     void closeEvent(QCloseEvent* event);
     void resizeEvent(QResizeEvent* event);
+    void mousePressEvent(QMouseEvent* event);
+    void mouseReleaseEvent(QMouseEvent* event);
 };
 //___________________________________________________
 class eQFrame : public QFrame {

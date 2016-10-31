@@ -1433,6 +1433,62 @@ private void f_THROW() {
 //	asm {	naked;	call h_DUP; mov EAX, 1; call h_THROW;	ret; }
 // }
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+// _______________________________________
+// Слова для работы с динамической памятью
+
+private void* h_gc_malloc(size_t sz) {
+	import core.memory: GC;
+	return cast(void*)GC.malloc(sz);
+}
+private void  f_GC_MALLOC() {
+	asm {	naked;
+		call h_gc_malloc;
+		ret;
+	}
+}
+private void h_gc_free(void* uk) {
+	import core.memory: GC;
+	// printf("%d\n", uk);
+	GC.free(uk);
+}
+private void  f_GC_FREE() {
+	asm {	naked;
+		call h_gc_free;
+		call h_DROP;
+		ret;
+	}
+}
+
+
+private void h_sd_writeln(string* uk) {
+	writeln(*uk);
+}
+private void  f_SD_WRITELN() {
+	asm {	naked;
+		call h_sd_writeln;
+		call h_DROP;
+		ret;
+	}
+}
+
+// Обработка вызова слота Slot_A_N_v
+// Выдать адрес обработчика для вызова функции с параметрами A и N
+private void* h_A_CALL_AN() { return &executeForth_A_N; }
+// Forth слово: выдать адрес обработчика для вызова функции с параметрами A и N
+private void  f_A_CALL_AN() {
+	asm {	naked;
+		call h_DUP;
+		call h_A_CALL_AN;
+		ret;
+	}
+}
+// Обработка вызова слота Slot_A_N_v
+extern (C) void executeForth_A_N(pp adr, int n) {
+	writeln("this is Call from C witch adr = ", adr, "  n = ", n);
+	executeForth(adr, 1, n);
+}
+
 // Выполнить адрес через EXECUTE
 extern (C) pp executeForth(pp adrexec, uint kolPar, ...) {
 	pp Adr_execD = gpcb.executeFromD;  // ' EXECUTEFROMD
@@ -1687,6 +1743,12 @@ void initForth() {
 	CreateVocItem(cast(char*)"\2B!".ptr, 		cast(pp)&h_setToAdrByte,&gpcb.context);
 	CreateVocItem(cast(char*)"\5BMOVE".ptr, 	cast(pp)&f_bmove,       &gpcb.context);
 
+	// ========== List words for call from C++ QtE5 =============
+	CreateVocItem(cast(char*)"\11A_CALL_AN".ptr,cast(pp)&f_A_CALL_AN,   &gpcb.context);
+	CreateVocItem(cast(char*)"\11GC_MALLOC".ptr,cast(pp)&f_GC_MALLOC,   &gpcb.context);
+	CreateVocItem(cast(char*)"\7GC_FREE".ptr,cast(pp)&f_GC_FREE,     &gpcb.context);
+	CreateVocItem(cast(char*)"\12SD_WRITELN".ptr,cast(pp)&f_SD_WRITELN,     &gpcb.context);
+
 	// ========== kernel\vm\STC\BASE\  ...... ============= ссылки
 	CreateVocItem(cast(char*)"\5>MARK".ptr, 	cast(pp)&f_R_MARK,		&gpcb.context);
 	CreateVocItem(cast(char*)"\5<MARK".ptr, 	cast(pp)&f_L_MARK,		&gpcb.context);
@@ -1752,7 +1814,6 @@ void initForth() {
 	// REGULAR ( xt --> ) I (исполнить слово), С (закомпилировать в определение)
 	evalForth(": REGULAR STATE @ IF COMPILE, ELSE EXECUTE THEN ; : CELLS CELL * ; ");
 	// IS ( xt / name --> ) Присвоить значение вектору, HAS ( / name --> xt ) получить значение вектора
-	// Применение VECT vec FIND DUP IS A A -- выполнить DUP и HAS A - получить адрес из вектора
 	evalForth(": IS ' LITERAL ['] TOKEN! REGULAR ; : HAS ' LITERAL ['] TOKEN@ REGULAR ;");
 	// COMMONADR@ ( n -- Value ) Значение в ячейке n общй таблицы. COMMONADR! ( Value n -- ) Запись значения в ячейку n
 	evalForth(": COMMONADR! CELL * COMMONADR + ! ; : COMMONADR@ CELL * COMMONADR + @ ;");

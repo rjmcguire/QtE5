@@ -75,13 +75,36 @@ extern (C) {
 }
 // __________________________________________________________________
 class CEditWin: QWidget { //=> Окно редактора D кода
-	const sizeTabHelp = 30;
+	void*	idMdi;
   private
+	const sizeTabHelp = 30;
 	enum Sost { //-> Состояние редактора
 		Normal,			// Нормальное состояние
+		Cmd,			// Командный режим
 		Change			// Режим работы с таблицей подсказок
 	}
-  private
+	// Текущее слово поиска для finder1.
+	// Алгоритм поиска:
+	//     Если в слове нет точки, то ffWord=слово, ffMetod=""
+	//     Если в слове есть точка, то ffWord=слово_без_метода, ffMetod=метод
+	string ffWord, ffMetod;
+
+	// Для поиска
+	struct FindSost { //-> Состояние поиска
+		string strFind;	// Строка поиска
+		bool bReg;		// T - регулярное выражение
+		bool bCase;		// T - рег зависимый поиск
+	}
+	FindSost sostFind;	// Текущее состояние поиска
+	QWidget wdFind;		// Виджет поиска
+	QHBoxLayout laFind;	// Выравниватель
+	QLineEdit	leFind;	// Строка поиска
+	QCheckBox	cbReg;	// T - регулярное выражение
+	QCheckBox	cbCase;	// T - рег зависимый поиск
+
+	static enum mPointMax = 10;
+	int[mPointMax] mPoint;	// Массив точек для запоминания позиции
+	
 	string	nameEditFile;		// Имя файла редактируемого в данный момент
 	Sost editSost = Sost.Normal;
 	int tekNomer;				// Текущий номер
@@ -106,7 +129,7 @@ class CEditWin: QWidget { //=> Окно редактора D кода
 	QAction		acUpdateLineNumberAreaWidth;
 	CLineNumberArea		lineNumberArea;		// Область нумерации строк
 	QSpinBox	spNumStr;		// Спин для перехода на строку
-	
+	QLabel		labelHelp;		// Строка подсветки имен функций
 	bool trigerNumStr;			// Странно, но 2 раза вызывается ... отсечем 2 раз
 	// ______________________________________________________________
 	// Конструктор по умолчанию
@@ -137,7 +160,20 @@ class CEditWin: QWidget { //=> Окно редактора D кода
 		teHelp.setMaximumWidth(230).setStyleSheet(strTabl); teHelp.setColumnWidth(0, 200);
 
 		// Строка сообщений
-		sbSoob = new QStatusBar(this);
+		sbSoob = new QStatusBar(this); // sbSoob.setMaximumHeight(32);
+		// Строка сообщений
+		labelHelp = new QLabel(this); labelHelp.setStyleSheet("background: white");
+
+		// Готовлю сттруктуру и виджет для поиска
+		wdFind = new QWidget(this); wdFind.hide();
+		wdFind.setMinimumWidth(100);
+		laFind = new QHBoxLayout(this);
+		leFind = new QLineEdit(this);
+		cbReg = new QCheckBox("R", this); cbReg.setToolTip("Регулярное выражение");
+		cbCase = new QCheckBox("C", this); cbCase.setToolTip("РегистроЗависимость");
+		laFind.addWidget(leFind).addWidget(cbReg).addWidget(cbCase);
+		wdFind.setLayout(laFind);
+		sbSoob.addPermanentWidget(wdFind);
 
 		// Делаю спин
 		spNumStr = new QSpinBox(this); spNumStr.hide(); spNumStr.setStyleSheet(strGreen);
@@ -152,7 +188,7 @@ class CEditWin: QWidget { //=> Окно редактора D кода
 			.addWidget(sliderTabl);
 		sliderTabl.setMinimum(6).setMaximum(20);
 
-		vblAll.addLayout(hb2).addWidget(sbSoob);
+		vblAll.addLayout(hb2).addWidget(labelHelp).addWidget(sbSoob);
 		setLayout(vblAll);
 
 		// Обработка клавиш в редакторе
@@ -167,6 +203,7 @@ class CEditWin: QWidget { //=> Окно редактора D кода
 
 //		acUpdateLineNumberAreaWidth = new QAction(this, &onUpdateLineNumberAreaWidth, aThis);
 //		connects(teEdit, "blockCountChanged(int)", acUpdateLineNumberAreaWidth, "Slot_v__A_N_i(int)");
+
 
 		// Делаю массив для таблицы
  		for(int i; i != sizeTabHelp; i++) {
@@ -188,15 +225,40 @@ class CEditWin: QWidget { //=> Окно редактора D кода
 	~this() {
 	}
 	// ______________________________________________________________
-	void runPaintTeEdit(void* ev, void* qpaint) { //-> 
+	void runPaintTeEdit(void* ev, void* qpaint) { //->
 		// При использовании Paint на QPlainTextEdit пользоваться самим Paint нельзя ...
 		lineNumberArea.update();
 	}
+	// ______________________________________________________________
+	// Вычислить номер строки для перехода по сохраненной точке
+	// 0 - нет перехода
+	// 
+	pure nothrow int lineGoTo(int tek, bool va) {
+		int rez, i, ml = mPoint.length;
+		if(ml == 0) return 0;
+	 	if(ml == 1) return mPoint[0];
+		if( (!va) && (tek > mPoint[$-1]) ) {
+			rez = mPoint[$-1]; goto mm;
+		}
+		while((i + 1) < ml) {
+			if( (mPoint[i] <= tek) && (tek <= mPoint[i+1]) ) {
+				rez = va ? mPoint[i+1] : mPoint[i];
+				if((rez == tek) && va) { i++; continue;	}
+				break;
+			} else i++;
+		}
+mm:
+		if(rez == tek) rez = 0;
+		return rez;
+}
 	// ______________________________________________________________
 	// Перерисовать себя
 	void runPaint(void* ev, void* qpaint) { //-> Перерисовка области
 		QPainter qp = new QPainter('+', qpaint);
 
+		// Получим список строк с точкам запоминания
+		int[]	pointSave; foreach(el; mPoint) { if(el > 0) pointSave ~= el; }
+		
 		// Получим шрифт, которым рисует painter
 		QFont font = new QFont(); qp.font(font);
 		QFontMetrics fontMetrics = new QFontMetrics(font);
@@ -217,12 +279,22 @@ class CEditWin: QWidget { //=> Окно редактора D кода
 		while(tb.isValid() && tb.isVisible()) {
 			blockNumber = tb.blockNumber();
 			int bottomTb = teEdit.bottomTextBlock(tb);
-			strNomerStr = format("%4d  ", blockNumber + 1);
+			
+			bool fIsPoint; int ts = blockNumber + 1;
+			foreach(el; pointSave) {
+				if(el == ts) { fIsPoint = true; break; }
+			}
+			if(fIsPoint) {
+				strNomerStr = format("%4d >>", ts);
+			} else {
+				strNomerStr = format("%4d  ", ts);
+			}
+			
 			if(blockNumber == lineUnderCursor) {
-				font.setBold(true).setOverline(true).setUnderline(true); 
+				font.setBold(true).setOverline(true).setUnderline(true);
 				qp.setFont(font);
 				qp.setText(0, bottomTb - fontMetrics.descent(), strNomerStr);
-				font.setBold(false).setOverline(false).setUnderline(false); 
+				font.setBold(false).setOverline(false).setUnderline(false);
 				qp.setFont(font);
 			} else {
 				qp.setText(0, bottomTb - fontMetrics.descent(), strNomerStr);
@@ -271,7 +343,7 @@ class CEditWin: QWidget { //=> Окно редактора D кода
 				~ to!string(__LINE__), QMessageBox.Icon.Critical);
 			return;
 		}
-		parentQtE5.loadParser(); // Заполним парсер
+		// parentQtE5.loadParser(); // Заполним парсер
 		try {
 			int ks;
 			foreach(line; fhFile.byLine()) {
@@ -351,20 +423,95 @@ class CEditWin: QWidget { //=> Окно редактора D кода
 	// ______________________________________________________________
 	void* runKeyPressEvent(void* ev) { //-> Обработка события нажатия кнопки
 		lineNumberArea.update();
+		QKeyEvent qe = new QKeyEvent('+', ev);
 		if( editSost == Sost.Normal) {
-			QKeyEvent qe = new QKeyEvent('+', ev);
 			switch(qe.key) {
 				case '"': insParaSkobki("\"");	break;
 				case '(': insParaSkobki(")");	break;
 				case '[': insParaSkobki("]");	break;
 				case '{': insParaSkobki("}");	break;
-				// case '/': insParaSkobki("/ ");	break;
+				case QtE.Key.Key_Return:
+						QTextBlock tb = new QTextBlock(txtCursor);
+						string strFromBlock = tb.text!string();
+						parentQtE5.finder1.addLine(strFromBlock);
+					break;
+				case QtE.Key.Key_L:
+					if(qe.modifiers == QtE.KeyboardModifier.ControlModifier) {
+						editSost = Sost.Cmd;
+						labelHelp.setText("Режим CMD");
+					}
+					break;
 				default: break;
+			}
+			if((qe.key == QtE.Key.Key_Return)) {
+				QTextBlock tb = new QTextBlock(txtCursor);
+				string strFromBlock = tb.text!string();
+				parentQtE5.finder1.addLine(strFromBlock);
 			}
 			return ev;
 		} else {
-			return null;
+			if( editSost == Sost.Change) {
+				return null;
+			} else {
+				if( editSost == Sost.Cmd) {
+					if(qe.modifiers == QtE.KeyboardModifier.ControlModifier) {
+						switch(qe.key) {
+							case QtE.Key.Key_L:
+								labelHelp.setText("Режим NORMAL");
+								break;
+							default: break;
+						}
+					} else {
+						// Срабатывает на нажатие символа после Ctrl+L
+						switch(qe.key) {
+							// Вставить комментарий
+							case QtE.Key.Key_Slash:
+								teEdit.textCursor(txtCursor); // Выдернули курсор из QPlainText
+								txtCursor.beginEditBlock();
+									txtCursor.movePosition(QTextCursor.MoveOperation.StartOfBlock);
+									txtCursor.insertText("// ");
+									txtCursor.movePosition(QTextCursor.MoveOperation.StartOfBlock);
+									txtCursor.movePosition(QTextCursor.MoveOperation.NextBlock);
+								txtCursor.endEditBlock();
+								teEdit.setTextCursor(txtCursor);
+								break;
+							// Удаоить строку
+							case QtE.Key.Key_D:
+								teEdit.textCursor(txtCursor); // Выдернули курсор из QPlainText
+								txtCursor.beginEditBlock();
+									txtCursor.select(QTextCursor.SelectionType.BlockUnderCursor).removeSelectedText();;
+									txtCursor.movePosition(QTextCursor.MoveOperation.StartOfBlock);
+									txtCursor.movePosition(QTextCursor.MoveOperation.NextBlock);
+								txtCursor.endEditBlock();
+								teEdit.setTextCursor(txtCursor);
+								break;
+							// Запомнить номер строки для перехода	
+							case QtE.Key.Key_T:
+								{
+									auto z = 1 + getNomerLineUnderCursor();
+									// Проверить, есть ли такой ... если есть убрать
+									bool isTakoy;
+									for(int i; i != mPointMax; i++) {
+										if(mPoint[i] == z) { mPoint[i] = 0; isTakoy = true; } 
+									}
+									if(!isTakoy) {
+										// Значит такой надо вставить
+										if(mPoint[0] == 0) { mPoint[0] = z; }
+									}
+									mPoint.sort;
+								}
+								break;
+							default: break;
+						}
+						labelHelp.setText("Режим NORMAL");
+						editSost = Sost.Normal;
+						// return ev;
+					}
+					return null;
+				}
+			}
 		}
+		return ev;
 	}
 	// ______________________________________________________________
 	void insParaSkobki(string s) {
@@ -376,6 +523,14 @@ class CEditWin: QWidget { //=> Окно редактора D кода
 		// Перерисуем номера строк, вызвам событие Paint через Update
 		// lineNumberArea.update();
 		QKeyEvent qe = new QKeyEvent('+', ev);
+		if(editSost == Sost.Cmd) {
+			return null;
+//			if(qe.modifiers == QtE.KeyboardModifier.ControlModifier) {
+//				if(qe.key == QtE.Key.Key_L)     return null;
+//				if(qe.key == QtE.Key.Key_Space) return null;
+//			}
+			// editSost = Sost.Normal;
+		}
 		if(editSost == Sost.Normal) {
 			if(qe.key == 16777216) { // ESC
 				editSost = Sost.Change;
@@ -392,34 +547,22 @@ class CEditWin: QWidget { //=> Окно редактора D кода
 				return null;
 			}
 
-			// Ctrl+D - удаление строки
-			if( (qe.key == QtE.Key.Key_D) & (qe.modifiers == QtE.KeyboardModifier.ControlModifier) ) {
-				txtCursor.select(QTextCursor.SelectionType.BlockUnderCursor).removeSelectedText();
-				txtCursor.movePosition(QTextCursor.MoveOperation.NextBlock);
-				txtCursor.movePosition(QTextCursor.MoveOperation.NextWord);
-				teEdit.setTextCursor(txtCursor);
-				return null;
-			}
-
-			// Ctrl+K - удаление до конца строки
-			if( (qe.key == QtE.Key.Key_K) & (qe.modifiers == QtE.KeyboardModifier.ControlModifier) ) {
-				return null;
-			}
-
 			if(qe.key == 16777266) { // F3
-				int poz = txtCursor.positionInBlock();
-				QTextBlock tb = new QTextBlock(txtCursor);
+				QTextBlock tb = new QTextBlock(txtCursor); int poz = txtCursor.positionInBlock();
 				// Строка под курсором
 				string strFromBlock = tb.text!string();
 				// Вычленить слово и по нему заполнить таблицу
-				string ffWord = getWordLeft(strFromBlock, poz);
-				parentQtE5.finder1.getSubFromAll(ffWord);
+				ffWord = getWordLeft(strFromBlock, poz);
+				// parentQtE5.finder1.getSubFromAll(ffWord);
 				setTablHelp( parentQtE5.finder1.getSubFromAll(ffWord) );
 				sbSoob.showMessage("[" ~ ffWord ~ "]  --> Список вхождений");
 				return null;
 			}
 
 			if(qe.key == 16777268) { // F5
+				parentQtE5.finder1.printUc();
+				return null;
+				/*
 				txtCursor.beginEditBlock();
 				txtCursor.movePosition(QTextCursor.MoveOperation.Start);
 				// Два раза вниз
@@ -433,66 +576,93 @@ class CEditWin: QWidget { //=> Окно редактора D кода
 				teEdit.setTextCursor(txtCursor);
 				txtCursor.endEditBlock();
 				return null;
+				*/
+			}
+			if(qe.key == 16777269) { // F6
+				parentQtE5.finder1.printMet();
+				return null;
 			}
 
-			int poz = txtCursor.positionInBlock();
-			QTextBlock tb = new QTextBlock(txtCursor);
+			QTextBlock tb = new QTextBlock(txtCursor); int poz = txtCursor.positionInBlock();
 			// Строка под курсором
 			string strFromBlock = tb.text!string();
 
+
 			// Вычленить слово и по нему заполнить таблицу
-			string ffWord = getWordLeft(strFromBlock, poz);
+			ffWord = getWordLeft(strFromBlock, poz); ffMetod = "";
 			sbSoob.showMessage("[" ~ ffWord ~ "]");
-			// setWindowTitle("[" ~ ffWord ~ "]");
-			setTablHelp(parentQtE5.finder1.getEq(ffWord));
-			// Добавим в поисковик текущую строку
-			parentQtE5.finder1.addLine(strFromBlock);
+
+			// А может в слове есть символ "." и это метод?
+			auto pozPoint = lastIndexOf(ffWord, '.');
+			if(pozPoint > -1) {		// Есть '.'
+				ffMetod = ffWord[pozPoint +1 .. $]; ffWord = ffWord[0 .. pozPoint];
+				labelHelp.setText("[" ~ ffWord ~ "] - [" ~ ffMetod ~ "]");
+				// Если таблица подсказки открыта, то искать метод
+				if(!teHelp.isHidden) {
+					setTablHelp(parentQtE5.finder1.getEqMet1(ffMetod));
+					// setTablHelp(parentQtE5.finder1.getSubFromAll(ffMetod));
+				}
+			} else {				// Нет  '.'
+				// Если таблица подсказки открыта, то искать слово
+				if(!teHelp.isHidden) setTablHelp(parentQtE5.finder1.getEq(ffWord));
+
+				// Добавим в поисковик текущую строку, если введен пробел
+				if(qe.key == QtE.Key.Key_Space) parentQtE5.finder1.addLine(strFromBlock);
+			}
+
+
 			// Показать строку статуса
 			parentQtE5.showInfo(to!string(editSost) ~ "  " ~ to!string(qe.key) ~ "  " ~ format("%s", qe.modifiers()));
 		} else {
-			if(qe.key == 16777216) { // ESC
-				editSost = Sost.Normal;
-				teHelp.setCurrentCell(100, 0);
-				pozInTable = 0;
-		        parentQtE5.showInfo(to!string(editSost) ~ "  " ~ to!string(qe.key));
-				return null;
-			}
-			if(qe.key == 16777237) { // Стрелка вниз
-				if(pozInTable < sizeTabHelp-1)	{
-					string str = strip( mTi[pozInTable+1].text!string() );
-					if( str != "" ) teHelp.setCurrentCell(++pozInTable, 0);
+			if(editSost == Sost.Change) {
+				if(qe.key == 16777216) { // ESC
+					editSost = Sost.Normal;
+					teHelp.setCurrentCell(100, 0);
+					pozInTable = 0;
+					parentQtE5.showInfo(to!string(editSost) ~ "  " ~ to!string(qe.key));
+					return null;
 				}
-			//	write("V"); stdout.flush();
+				if(qe.key == 16777237) { // Стрелка вниз
+					if(pozInTable < sizeTabHelp-1)	{
+						string str = strip( mTi[pozInTable+1].text!string() );
+						if( str != "" ) teHelp.setCurrentCell(++pozInTable, 0);
+					}
+				}
+				if(qe.key == 16777235) { // Стрелка вверх
+					if(pozInTable > 0)	teHelp.setCurrentCell(--pozInTable, 0);
+				//	write("A"); stdout.flush();
+				}
+				// Space - вернуть выбранное слово из таблицы и уйти в редактор
+				if( (qe.key == QtE.Key.Key_Space) & (qe.modifiers == QtE.KeyboardModifier.NoModifier) ) {
+					insWordFromTableByNomer(pozInTable, txtCursor);  return null;
+				}
+				return null;
+			} else {
 			}
-			if(qe.key == 16777235) { // Стрелка вверх
-				if(pozInTable > 0)	teHelp.setCurrentCell(--pozInTable, 0);
-			//	write("A"); stdout.flush();
-			}
-/* 			if(qe.key == 16777220) { // CR
-				insWordFromTableByNomer(pozInTable, txtCursor);
-				sbSoob.showMessage("");
-			}
- */			// Space - вернуть выбранное слово из таблицы и уйти в редактор
-			if( (qe.key == QtE.Key.Key_Space) & (qe.modifiers == QtE.KeyboardModifier.NoModifier) ) {
-				insWordFromTableByNomer(pozInTable, txtCursor);  return null;
-			}
-
-
-			return null;
 		}
 		return ev;	// Вернуть событие в C++ Qt для дальнейшей обработки
 	}
 	// ______________________________________________________________
 	void insWordFromTableByNomer(int poz, QTextCursor txtCursor) { //-> Вставить слово из таблицы по номеру в редактируемый текст
+		static import std.utf;
 		// Выключить подсветку таблицы
 		teHelp.setCurrentCell(100, 0); editSost = Sost.Normal;
 		// Слово из таблицы
 		string shabl = mTi[poz].text!string(); pozInTable = 0;
-		// Замена текущего слова под курсором
+		// Замена слова для поиска, словом из таблицы
 		txtCursor.beginEditBlock();
-		txtCursor.movePosition(QTextCursor.MoveOperation.StartOfWord);
-		txtCursor.movePosition(QTextCursor.MoveOperation.EndOfWord, QTextCursor.MoveMode.KeepAnchor);
-		txtCursor.removeSelectedText();
+
+		if(ffMetod == "") {
+			for(int i; i != std.utf.count(ffWord); i++) {
+				txtCursor.movePosition(QTextCursor.MoveOperation.PreviousCharacter, QTextCursor.MoveMode.KeepAnchor);
+				txtCursor.removeSelectedText();
+			}
+		} else {
+			for(int i; i != std.utf.count(ffMetod); i++) {
+				txtCursor.movePosition(QTextCursor.MoveOperation.PreviousCharacter, QTextCursor.MoveMode.KeepAnchor);
+				txtCursor.removeSelectedText();
+			}
+		}
 		txtCursor.insertText(shabl);
 		teEdit.setTextCursor(txtCursor); // вставили курсор опять в QPlainText
 		txtCursor.endEditBlock();
@@ -532,6 +702,7 @@ extern (C) {
 	void on_knNew(CFormaMain* uk)		{ (*uk).NewFile();  }
 	// Сохранение файла
 	void on_knSave(CFormaMain* uk)		{ (*uk).SaveFile();  }
+	void on_helpIde(CFormaMain* uk) 	{ (*uk).runHelpIde(); }
 	// Обработчик с параметром. Параметр позволяет не плодить обработчики
 	void on_about(CFormaMain* uk) 		{ (*uk).about(1); }
 	void on_aboutQt(CFormaMain* uk)		{ (*uk).about(2); }
@@ -539,8 +710,14 @@ extern (C) {
 	void on_DynAct(CFormaMain* uk, int n)  { (*uk).runDynAct(n);  }
 	void onRunApp(CFormaMain* uk)          { (*uk).runRunApp(); }
 	void onRunProj(CFormaMain* uk)         { (*uk).runRunProj(); }
+	void onCompile(CFormaMain* uk)         { (*uk).runCompile(); }
+	void onUnitTest(CFormaMain* uk)         { (*uk).runUnitTest(); }
 	void onSwEdit(CFormaMain* uk, int n)   { (*uk).runSwEdit(n); }
 	void onGotoNum(CFormaMain* uk)         { (*uk).runGotoNum(); }
+	void onFind(CFormaMain* uk)            { (*uk).runFind(); }
+	void onFindA(CFormaMain* uk)           { (*uk).runFindA(); }
+	void onPointV(CFormaMain* uk)          { (*uk).runPointV(); }
+	void onPointA(CFormaMain* uk)          { (*uk).runPointA(); }
 	void onOnOffHelp(CFormaMain* uk)       { (*uk).runOnOffHelp(); }
 }
 // __________________________________________________________________
@@ -559,22 +736,29 @@ class CFormaMain: QMainWindow { //=> Основной MAIN класс прило
 
 	CEditWin				activeWinEdit;	// Активный в данный момент редактор
 	int 			winEditKol;				// Количество окошек редактора
-	QMenu menu1, menu2;						// Меню
+	QMenu menu1, menu2, menu3;						// Меню
 	QAction[] menuActDyn;
 	QMenu[] menuDyn;						// Динамическое меню
 	QMenuBar mb1;							// Строка меню сверху
 	QAction acOpen, acNewFile, acSave, acSaveAs;	// Обработчики
-	QAction acAbout, acAboutQt, acExit, acRunApp, acRunProj, acOnOffHelp, acGotoNum;
+	QAction acAbout, acAboutQt, acExit, acOnOffHelp, acGotoNum, acFind, acFindA;
+	QAction acPoint, acPointA, acHelpIde;
+	QAction acUnitTest, acCompile, acRunApp, acRunProj;
 	QStatusBar      stBar;					// Строка сообщений
 	QToolBar tb, tbSwWin;					// Строка кнопок
 	string[]	sShabl;						// Массив шаблонов. Первые 2 цифры - индекс
 	CFinder finder1;						// Поисковик
+	QCheckBox cbDebug;
+	string[] swCompile = [ "qte5", "asc1251" ];
+
+	QLabel w1;
 
 	// ______________________________________________________________
 	this() { //-> Базовый конструктор
 		// Главный виджет, в который всё вставим
 		super();
 		mainWid = new QMdiArea(this);
+		resize(1000, 800);
 
 		// Обработчики
 		acExit	= new QAction(this, &on_Exit,   aThis);
@@ -601,6 +785,14 @@ class CFormaMain: QMainWindow { //=> Основной MAIN класс прило
 		// acSaveAs.setText("Save as").setHotKey(QtE.Key.Key_S | QtE.Key.Key_ControlModifier);
 		// connects(acSaveAs, "triggered()", acSave, "Slot()");
 
+		acCompile = new QAction(this, &onCompile, aThis);
+		acCompile.setText("Compile").setHotKey(QtE.Key.Key_B | QtE.Key.Key_ControlModifier);
+		connects(acCompile, "triggered()", acCompile, "Slot()");
+
+		acUnitTest = new QAction(this, &onUnitTest, aThis);
+		acUnitTest.setText("UnitTest");
+		connects(acUnitTest, "triggered()", acUnitTest, "Slot()");
+
 		// Актион
 		acRunApp = new QAction(this, &onRunApp, aThis);
 		acRunApp.setText("Старт").setHotKey(QtE.Key.Key_R | QtE.Key.Key_ControlModifier);
@@ -616,12 +808,41 @@ class CFormaMain: QMainWindow { //=> Основной MAIN класс прило
 		acGotoNum.setText("На строку №").setHotKey(QtE.Key.Key_G | QtE.Key.Key_ControlModifier);
 		// acGotoNum.setIcon("ICONS/nsi.ico").setToolTip("Компилировать и выполнить проект ...");
 		connects(acGotoNum, "triggered()", acGotoNum, "Slot()");
+
+		acPoint = new QAction(this, &onPointV, aThis);
+		acPoint.setToolTip("Перейти на позицию вниз ...");
+		acPoint.setText("Закладка V").setHotKey(
+			QtE.Key.Key_T | QtE.KeyboardModifier.ControlModifier);
+		connects(acPoint, "triggered()", acPoint, "Slot()");
 		
+		acPointA = new QAction(this, &onPointA, aThis);
+		acPointA.setToolTip("Перейти на позицию вверх ...");
+		acPointA.setText("Закладка A").setHotKey(
+			QtE.Key.Key_T | QtE.KeyboardModifier.ControlModifier | QtE.KeyboardModifier.ShiftModifier);
+		connects(acPointA, "triggered()", acPointA, "Slot()");
+		
+		acFind = new QAction(this, &onFind, aThis);
+		acFind.setText("Поиск V").setHotKey(
+			QtE.Key.Key_F | QtE.KeyboardModifier.ControlModifier);
+		// acFind.setIcon("ICONS/nsi.ico").setToolTip("Компилировать и выполнить проект ...");
+		connects(acFind, "triggered()", acFind, "Slot()");
+
+		acFindA = new QAction(this, &onFindA, aThis);
+		acFindA.setText("Поиск A").setHotKey(
+			QtE.Key.Key_F | QtE.KeyboardModifier.ControlModifier  | QtE.KeyboardModifier.ShiftModifier);
+		// acFind.setIcon("ICONS/nsi.ico").setToolTip("Компилировать и выполнить проект ...");
+		connects(acFindA, "triggered()", acFindA, "Slot()");
+
+
 		acOnOffHelp = new QAction(this, &onOnOffHelp, aThis);
 		acOnOffHelp.setText("On/Off Таблица").setHotKey(QtE.Key.Key_H | QtE.Key.Key_ControlModifier);
 		// acGotoNum.setIcon("ICONS/nsi.ico").setToolTip("Компилировать и выполнить проект ...");
 		connects(acOnOffHelp, "triggered()", acOnOffHelp, "Slot()");
-		
+
+		acHelpIde = new QAction(this, &on_helpIde,  aThis);
+		acHelpIde.setText("Help IDE");
+		connects(acHelpIde, "triggered()", acHelpIde, "Slot()");
+
 		acAbout   = new QAction(this, &on_about,    aThis, 1); 	// 1 - парам в обработчик
 		acAboutQt = new QAction(this, &on_aboutQt,  aThis, 2); 	// 2 - парам в обработчик
 		// Обработчик для About и AboutQt
@@ -634,11 +855,12 @@ class CFormaMain: QMainWindow { //=> Основной MAIN класс прило
 		stBar = new QStatusBar(this); stBar.setStyleSheet(strGreen);
 
 		// Menu
- 		menu2 = new QMenu(this),  menu1 = new QMenu(this);
+ 		menu3 = new QMenu(this),  menu2 = new QMenu(this),  menu1 = new QMenu(this);
 		// MenuBar
-		mb1 = new QMenuBar(this); mb1.addMenu(menu1).addMenu(menu2);
+		mb1 = new QMenuBar(this);
 		// --------------- Взаимные настройки -----------------
 		menu2.setTitle("About")
+			.addAction(		acHelpIde	)
 			.addAction(		acAbout		)
 			.addAction(		acAboutQt 	);
 
@@ -648,9 +870,22 @@ class CFormaMain: QMainWindow { //=> Основной MAIN класс прило
 			.addAction(		acSave		)
 			// .addAction(		acSaveAs	)
 			.addAction(     acGotoNum	)
+			.addAction(     acFind		)
+			.addAction(     acFindA		)
+			.addAction(     acPoint		)
+			.addAction(     acPointA	)
 			.addAction(     acOnOffHelp )
 			.addSeparator()
 			.addAction(		acExit		);
+
+		menu3.setTitle("Build")
+			.addAction(		acCompile	)
+			.addAction(		acUnitTest 	)
+			.addAction(		acRunApp 	)
+			.addAction(		acRunProj 	);
+
+
+		mb1.addMenu(menu1).addMenu(menu3).addMenu(menu2);
 
 /* 		for(int j; j !=2; j++) {
 			menuDyn ~= new QMenu(this);
@@ -669,6 +904,12 @@ class CFormaMain: QMainWindow { //=> Основной MAIN класс прило
 		tb = new QToolBar(this); tbSwWin = new QToolBar(this);
 		// tb.setStyleSheet(strElow);
 		tbSwWin.setStyleSheet( strElow );
+
+		// CheckBox for debug compole options
+		cbDebug = new QCheckBox(this);
+		cbDebug.setText("debug");
+		cbDebug.setToolTip("-debug --> in parametrs of compile");
+
 		// Настраиваем ToolBar
 		tb.setToolButtonStyle(QToolBar.ToolButtonStyle.ToolButtonTextBesideIcon);
 		tb
@@ -676,7 +917,9 @@ class CFormaMain: QMainWindow { //=> Основной MAIN класс прило
 			.addSeparator()
 			// .addAction(acExit)
 			.addAction(acRunApp)
-			.addAction(acRunProj);
+			.addAction(acRunProj)
+			.addSeparator()
+			.addWidget(cbDebug);
 
 		addToolBar(QToolBar.ToolBarArea.TopToolBarArea, tb);
 
@@ -771,6 +1014,74 @@ class CFormaMain: QMainWindow { //=> Основной MAIN класс прило
 		}
 	}
 	// ______________________________________________________________
+	// Перейти на точку сохранения вниз
+	void runPointV() { //-> Перейти на точку сохранения вниз
+		// Определим активное окно редактора
+		int aWinEd = actWinEdit();
+		if(aWinEd == -1) {
+			msgbox("Нет активного окна для выполнения кода!", "Внимание! стр: "
+				~ to!string(__LINE__), QMessageBox.Icon.Critical);
+			return;
+		}
+		CEditWin winEd = winEdit[aWinEd];
+		int nomGoTo = winEd.lineGoTo(1 + winEd.getNomerLineUnderCursor, true);
+		if(nomGoTo > 0) winEd.teEdit.setCursorPosition(nomGoTo - 1, 0);
+	}
+	// ______________________________________________________________
+	// Перейти на точку сохранения вниз
+	void runPointA() { //-> Перейти на точку сохранения вверх
+		// Определим активное окно редактора
+		int aWinEd = actWinEdit();
+		if(aWinEd == -1) {
+			msgbox("Нет активного окна для выполнения кода!", "Внимание! стр: "
+				~ to!string(__LINE__), QMessageBox.Icon.Critical);
+			return;
+		}
+		CEditWin winEd = winEdit[aWinEd];
+		int nomGoTo = winEd.lineGoTo(1 + winEd.getNomerLineUnderCursor, false);
+		if(nomGoTo > 0) winEd.teEdit.setCursorPosition(nomGoTo - 1, 0);
+	}
+	// ______________________________________________________________
+	// Запросить строку поиска и аргументы
+	void runFind() { //-> Запросить строку поиска и аргументы
+		// Определим активное окно редактора
+		int aWinEd = actWinEdit();
+		if(aWinEd == -1) {
+			msgbox("Нет активного окна для выполнения кода!", "Внимание! стр: "
+				~ to!string(__LINE__), QMessageBox.Icon.Critical);
+			return;
+		}
+		CEditWin winEd = winEdit[aWinEd];
+		// QWidget wdFind =  winEdit[aWinEd].wdFind;
+		if(winEd.wdFind.isHidden) {
+			winEd.wdFind.show(); winEd.leFind.setFocus(); // winEd.leFind.selectAll();
+		} else {
+			winEd.teEdit.setFocus();
+			winEd.wdFind.hide(); // winEd.teEdit.setFocus();
+			winEd.teEdit.find( winEd.leFind.text!QString(), 0 );
+		}
+	}
+	// ______________________________________________________________
+	// Запросить строку поиска и аргументы
+	void runFindA() { //-> Запросить строку поиска и аргументы
+		// Определим активное окно редактора
+		int aWinEd = actWinEdit();
+		if(aWinEd == -1) {
+			msgbox("Нет активного окна для выполнения кода!", "Внимание! стр: "
+				~ to!string(__LINE__), QMessageBox.Icon.Critical);
+			return;
+		}
+		CEditWin winEd = winEdit[aWinEd];
+		// QWidget wdFind =  winEdit[aWinEd].wdFind;
+		if(winEd.wdFind.isHidden) {
+			winEd.wdFind.show(); winEd.leFind.setFocus(); // winEd.leFind.selectAll();
+		} else {
+			winEd.teEdit.setFocus();
+			winEd.wdFind.hide(); // winEd.teEdit.setFocus();
+			winEd.teEdit.find( winEd.leFind.text!QString(), 1 );
+		}
+	}
+	// ______________________________________________________________
 	// Запросить номер строки и перейти на неё
 	void runGotoNum() { //-> переход на строку N
 		// Определим активное окно редактора
@@ -787,6 +1098,7 @@ class CFormaMain: QMainWindow { //=> Основной MAIN класс прило
 		sp.setMinimum(1).setMaximum(winEdit[aWinEd].teEdit.blockCount());
 		sp.setValue(1 + winEdit[aWinEd].getNomerLineUnderCursor());
 		sp.show(); sp.setFocus(); sp.selectAll();
+		// writeln(winEdit[aWinEd].mPoint);
 	}
 	// ______________________________________________________________
 	void loadParser() { //-> Загрузить парсер файлами из проекта
@@ -800,6 +1112,7 @@ class CFormaMain: QMainWindow { //=> Основной MAIN класс прило
 				~ to!string(__LINE__), QMessageBox.Icon.Critical);
 			return;
 		}
+		// finder1.printUc();
 	}
 	// ______________________________________________________________
 	void setActWinForNom(int nom, bool y) { //-> Покрась в активный цвет кнопку
@@ -828,6 +1141,7 @@ class CFormaMain: QMainWindow { //=> Основной MAIN класс прило
 		string rez;
 		version (Windows) {	rez = nameCompile;         }
 		version (linux)   { rez = nameCompile[0..$-4]; }
+		version (OSX)   { rez = nameCompile[0..$-4]; }
 		return rez;
 	}
 	// ______________________________________________________________
@@ -847,6 +1161,7 @@ class CFormaMain: QMainWindow { //=> Основной MAIN класс прило
 		}
 		// Готовимся к компиляции
 		string nameLog = constNameLog;
+writeln(listModuls);
 		auto logFile = File(nameLog, "w");
 			auto pid = spawnProcess(listModuls,
 				std.stdio.stdin,
@@ -876,9 +1191,7 @@ class CFormaMain: QMainWindow { //=> Основной MAIN класс прило
 		}
 	}
 	// ______________________________________________________________
-	void runRunApp() { //-> Компиляция и запуск
-		SaveFile();		// Сохраним перед запуском
-		// Определим активное окно редактора
+	void runCompile() { //-> Компиляция проверка ошибок
 		int aWinEd = actWinEdit();
 		if(aWinEd == -1) {
 			msgbox("Нет активного окна для выполнения кода!", "Внимание! стр: "
@@ -886,31 +1199,115 @@ class CFormaMain: QMainWindow { //=> Основной MAIN класс прило
 			return;
 		}
 		string nameFile = winEdit[aWinEd].getNameEditFile();
-		string nameLog = constNameLog;
 		if(nameFile == "") {
 			msgbox("Не задано имя файла, не могу компилировать", "Внимание! стр: "
 				~ to!string(__LINE__), QMessageBox.Icon.Critical);
 			return;
 		}
-		if(aWinEd > -1) {
-			auto logFile = File(nameLog, "w");
-				auto pid = spawnProcess([nameDMDonOs(), nameFile, "asc1251", "qte5"],
-					std.stdio.stdin,
-					std.stdio.stdout,
-					logFile
-				);
-			if (wait(pid) != 0) {
-				string sLog = cast(string)read(nameLog);
-				msgbox(sLog, "Ошибки компиляции ...");
-			} else {
-				writeln(toCON("---- Выполняю: " ~ nameFile[0..$-2]), " ------------------------");
-				// msgbox(nameFile[0..$-2]);
-				auto pid2 = spawnProcess([nameFile[0..$-2]]);
-			}
+		SaveFile();		// Сохраним перед запуском
+		// стандартные проверки позади
+		string nameLog = constNameLog;
+		auto logFile = File(nameLog, "w");
+			string[] swCompileMain = [ nameDMDonOs(), "-c", nameFile ];
+			if(cbDebug.checkState == QtE.CheckState.Checked) swCompileMain ~= "-debug";
+			auto pid = spawnProcess(swCompileMain,
+				std.stdio.stdin,
+				std.stdio.stdout,
+				logFile
+			);
+		if (wait(pid) != 0) {
+			string sLog = cast(string)read(nameLog);
+			msgbox(sLog, "Compile  ...", QMessageBox.Icon.Critical);
 		} else {
-			msgbox("Не выбрано окно исходного текста для сохранения", "Внимание! стр: "
-				~ to!string(__LINE__), QMessageBox.Icon.Critical);
+			msgbox("Compile is Ok", "Compile  ...");
 		}
+		winEdit[aWinEd].teEdit.setFocus();
+	}
+	// ______________________________________________________________
+	void runUnitTest() { //-> Компиляция и выполнение UnitTest
+		msgbox("UnitTest ...");
+	}
+	// ______________________________________________________________
+	void runRunApp() { //-> Компиляция и запуск
+		int aWinEd = actWinEdit();
+		if(aWinEd == -1) {
+			msgbox("Нет активного окна для выполнения кода!", "Внимание! стр: "
+				~ to!string(__LINE__), QMessageBox.Icon.Critical);
+			return;
+		}
+		string nameFile = winEdit[aWinEd].getNameEditFile();
+		if(nameFile == "") {
+			msgbox("Не задано имя файла, не могу компилировать", "Внимание! стр: "
+				~ to!string(__LINE__), QMessageBox.Icon.Critical);
+			return;
+		}
+		SaveFile();		// Сохраним перед запуском
+		// стандартные проверки позади
+		string nameLog = constNameLog;
+		// Найдено активное окно редактора
+		auto logFile = File(nameLog, "w");
+			string[] swCompileMain = [ nameDMDonOs(), nameFile ];
+			if(cbDebug.checkState == QtE.CheckState.Checked) {
+				swCompileMain ~= (swCompile ~ "-debug");
+			} else {
+				swCompileMain ~= swCompile;
+			}
+			auto pid = spawnProcess(swCompileMain,
+				std.stdio.stdin,
+				std.stdio.stdout,
+				logFile
+			);
+		if (wait(pid) != 0) {
+			string sLog = cast(string)read(nameLog);
+			msgbox(sLog, "Compile  ...", QMessageBox.Icon.Critical);
+		} else {
+			string nameRunFile = nameFile[0..$-2];
+			writeln(toCON("---- Выполняю: " ~ nameRunFile ~ " ----"));
+			auto pid2 = spawnProcess(nameRunFile);
+		}
+		winEdit[aWinEd].teEdit.setFocus();
+	}
+	// ______________________________________________________________
+	void runHelpIde() { //-> Открыть окно с подсказками по кнопкам
+		string sHtml = 
+`
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+<title>Здесь название страницы, отображаемое в верхнем левом углу браузера</title>
+</head>
+<body id="help IDE5">
+<h2 align="center">Краткий справочник по ide5</h2>
+<p><font color="red"><b>Вставка слова из таблицы подсказок:</b></font></p>
+<pre>
+	Esc           - Переход и возврат в таблицу подсказок
+	Space         - Вставка выделенного слова, если в таблице подсказок
+	Ctrl+Space    - Вставка самого верхнего слова, если в редакторе
+</pre>
+<p><font color="red"><b>Закладки:</b></font></p>
+<pre>
+Закладки отображаются символом ">>" в колонке номеров строк и индивидуальны
+для каждого окна редактора.
+	Ctrl+L, T     - Поставить закладку или снять закладку
+	Ctrl+T        - Вниз  на след закладку
+	Ctrl+Shift+T  - Вверх на пред закладку
+</pre>
+<p><font color="red"><b>Разное:</b></font></p>
+<pre>
+	Ctrl+L, /     - Вставить комментарий
+	Ctrl+L, D     - Удалить текущ стоку
+	F3            - Список всех похожих слов
+</pre>
+
+<br>
+</body>
+</html>
+`;
+		w1 = new QLabel(this); w1.saveThis(&w1);
+		w1.setText(sHtml);
+		void* rez = mainWid.addSubWindow(w1);
+		// writeln(rez, "  ", cast(void*)w1.QtObj);
+		w1.show();
 	}
 	// ______________________________________________________________
 	void runDynAct(int nom) { //-> Процедура обработки меню шаблона
@@ -949,9 +1346,14 @@ class CFormaMain: QMainWindow { //=> Основной MAIN класс прило
 		foreach(ed; winEdit) {
 			if(ed is null) continue;
 			try {
+				void* tekWin = mainWid.activeSubWindow();
+				if(tekWin == ed.idMdi)		{ rez = ed.tekNomer; break; }
+				/*
 				if(ed.teEdit.hasFocus())     { rez = ed.tekNomer; break; }
 				if(ed.teHelp.hasFocus())     { rez = ed.tekNomer; break; }
+				if(ed.leFind.hasFocus())     { rez = ed.tekNomer; break; }
 				if(ed.sliderTabl.hasFocus()) { rez = ed.tekNomer; break; }
+				*/
 			} catch {
 				return -1;
 			}
@@ -995,20 +1397,16 @@ class CFormaMain: QMainWindow { //=> Основной MAIN класс прило
 		int preNomAct = -1;
 		if(winEditKol < maxKolEdit) {
 			if(activeWinEdit !is null) preNomAct = activeWinEdit.tekNomer;
-			// writeln(preNomAct, " is active ", activeWinEdit);
 			winEdit[winEditKol] = new CEditWin(this, QtE.WindowType.Window);
-			// winEdit[winEditKol].setNoDelete(true);
 			winEdit[winEditKol].setParentQtE5(this);
 			winEdit[winEditKol].saveThis(&winEdit[winEditKol]);
-			mainWid.addSubWindow(winEdit[winEditKol]);
+			winEdit[winEditKol].idMdi = mainWid.addSubWindow(winEdit[winEditKol]);
 			activeWinEdit = winEdit[winEditKol]; // Активный в данный момент
 			winEdit[winEditKol].tekNomer = winEditKol;
 			if(nameFile != "") {
 				winEdit[winEditKol].openWinEdit(nameFile);
-			} else {
-				// winEdit[winEditKol].loadParser(); // Заполним парсер
 			}
-			winEdit[winEditKol].showNormal();
+			winEdit[winEditKol].showMaximized();
 			winEdit[winEditKol].teEdit.setFocus();
 			// Делаю для него кнопку
 			winKnEdit[winEditKol] = new QPushButton(nameFile, this);
@@ -1026,11 +1424,20 @@ class CFormaMain: QMainWindow { //=> Основной MAIN класс прило
 	void about(int n) {
 		if(n == 1) {
 
-			msgbox("MGW 2016
+			msgbox(
+"
+<H2>IDE5 - miniIDE for dmd</H2>
+<H3>MGW 2016 ver 0.4 от 19.08.2016</H3>
+<BR>
+<IMG src='ICONS/qte5.png'>
+<BR>
+<p>miniIDE for dmd + QtE5 + Qt-5</p>
+<p>It application is only demo work with QtE5</p>
 
-miniIDE for dmd + QtE5 + Qt-5
 
-ver 0.1", "About ...");
+"
+
+, "About IDE5");
 		}
 		if(n == 2) {	app.aboutQt();	}
 	}
@@ -1088,7 +1495,7 @@ int main(string[] args) {
 			QMessageBox.Icon.Critical); return(1);
 	}
 	CFormaMain formaMain = new CFormaMain(); formaMain.show().saveThis(&formaMain);
-	QEndApplication endApp = new QEndApplication('+', app.QtObj);
+	// QEndApplication endApp = new QEndApplication('+', app.QtObj);
 	return app.exec();
 }
 
